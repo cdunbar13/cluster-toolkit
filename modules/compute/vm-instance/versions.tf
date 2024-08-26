@@ -26,11 +26,6 @@ terraform {
       version = ">= 4.73.0"
     }
 
-    google-private = {
-      source  = "hashicorp/google-private"
-      version = ">= 0.0.1954"
-    }
-
     null = {
       source  = "hashicorp/null"
       version = ">= 3.0"
@@ -40,9 +35,6 @@ terraform {
     module_name = "blueprints/terraform/hpc-toolkit:vm-instance/v1.38.0"
   }
   provider_meta "google-beta" {
-    module_name = "blueprints/terraform/hpc-toolkit:vm-instance/v1.38.0"
-  }
-  provider_meta "google-private" {
     module_name = "blueprints/terraform/hpc-toolkit:vm-instance/v1.38.0"
   }
 
