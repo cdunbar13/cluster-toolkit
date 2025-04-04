@@ -69,5 +69,28 @@ resource "google_workbench_instance" "instance" {
       project = var.instance_image.project
       family  = var.instance_image.family
     }
+
+    dynamic "service_accounts" {
+      for_each = var.service_account_email == null ? [] : [1]
+      content {
+        email = var.service_account_email
+      }
+    }
+
+    dynamic "network_interfaces" {
+      for_each = var.network_interfaces
+      content {
+        network  = network_interfaces.value.network
+        subnet   = network_interfaces.value.subnet
+        nic_type = network_interfaces.value.nic_type
+
+        dynamic "access_configs" {
+          for_each = network_interfaces.value.access_configs != null ? network_interfaces.value.access_configs : []
+          content {
+            external_ip = access_configs.value.external_ip
+          }
+        }
+      }
+    }
   }
 }

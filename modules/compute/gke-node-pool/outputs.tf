@@ -14,17 +14,14 @@
   * limitations under the License.
   */
 
-output "node_pool_name" {
-  description = "Name of the node pool."
-  value       = google_container_node_pool.node_pool.name
+output "node_pool_names" {
+  description = "Names of the node pools."
+  value       = google_container_node_pool.node_pool[*].name
 }
 
 locals {
-  is_a_series = local.machine_family == "a2"
-  last_digit  = trimsuffix(try(local.machine_vals[2], 0), "g")
-
   # Shared core machines only have 1 cpu allocatable, even if they have 2 cpu capacity
-  vcpu        = local.machine_shared_core ? 1 : local.is_a_series ? local.last_digit * 12 : local.last_digit
+  vcpu        = local.machine_shared_core ? 1 : local.guest_cpus
   useable_cpu = local.set_threads_per_core ? local.threads_per_core * local.vcpu / 2 : local.vcpu
 
   # allocatable resource definition: https://cloud.google.com/kubernetes-engine/docs/concepts/plan-node-sizes#cpu_reservations
@@ -61,7 +58,7 @@ locals {
     NO_SCHEDULE        = "NoSchedule"
     NO_EXECUTE         = "NoExecute"
   }
-  taints = google_container_node_pool.node_pool.node_config[0].taint
+  taints = google_container_node_pool.node_pool[0].node_config[0].taint
   tolerations = [for taint in local.taints : {
     key      = taint.key
     operator = "Equal"
