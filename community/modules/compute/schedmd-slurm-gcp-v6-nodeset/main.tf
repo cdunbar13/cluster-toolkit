@@ -17,7 +17,16 @@ locals {
   labels = merge(var.labels, { ghpc_module = "schedmd-slurm-gcp-v6-nodeset", ghpc_role = "compute" })
 }
 
+module "gpu" {
+  source = "../../../../modules/internal/gpu-definition"
+
+  machine_type      = var.machine_type
+  guest_accelerator = var.guest_accelerator
+}
+
 locals {
+  guest_accelerator = module.gpu.guest_accelerator
+
   disable_automatic_updates_metadata = var.allow_automatic_updates ? {} : { google_disable_automatic_updates = "TRUE" }
 
   metadata = merge(
@@ -29,13 +38,14 @@ locals {
 
   additional_disks = [
     for ad in var.additional_disks : {
-      disk_name    = ad.disk_name
-      device_name  = ad.device_name
-      disk_type    = ad.disk_type
-      disk_size_gb = ad.disk_size_gb
-      disk_labels  = merge(ad.disk_labels, local.labels)
-      auto_delete  = ad.auto_delete
-      boot         = ad.boot
+      disk_name                  = ad.disk_name
+      device_name                = ad.device_name
+      disk_type                  = ad.disk_type
+      disk_size_gb               = ad.disk_size_gb
+      disk_labels                = merge(ad.disk_labels, local.labels)
+      auto_delete                = ad.auto_delete
+      boot                       = ad.boot
+      disk_resource_manager_tags = ad.disk_resource_manager_tags
     }
   ]
 
@@ -59,30 +69,33 @@ locals {
     nodeset_name           = local.name
     dws_flex               = var.dws_flex
 
-    disk_auto_delete = var.disk_auto_delete
-    disk_labels      = merge(local.labels, var.disk_labels)
-    disk_size_gb     = var.disk_size_gb
-    disk_type        = var.disk_type
-    additional_disks = local.additional_disks
+    disk_auto_delete           = var.disk_auto_delete
+    disk_labels                = merge(local.labels, var.disk_labels)
+    disk_size_gb               = var.disk_size_gb
+    disk_type                  = var.disk_type
+    disk_resource_manager_tags = var.disk_resource_manager_tags
+    additional_disks           = local.additional_disks
 
     bandwidth_tier = var.bandwidth_tier
     can_ip_forward = var.can_ip_forward
-    disable_smt    = !var.enable_smt
 
     enable_confidential_vm = var.enable_confidential_vm
     enable_placement       = var.enable_placement
+    placement_max_distance = var.placement_max_distance
     enable_oslogin         = var.enable_oslogin
     enable_shielded_vm     = var.enable_shielded_vm
     gpu                    = one(local.guest_accelerator)
 
-    labels           = local.labels
-    machine_type     = terraform_data.machine_type_zone_validation.output
-    metadata         = local.metadata
-    min_cpu_platform = var.min_cpu_platform
+    labels                    = local.labels
+    machine_type              = terraform_data.machine_type_zone_validation.output
+    advanced_machine_features = var.advanced_machine_features
+    metadata                  = local.metadata
+    min_cpu_platform          = var.min_cpu_platform
 
     on_host_maintenance      = var.on_host_maintenance
     preemptible              = var.preemptible
     region                   = var.region
+    resource_manager_tags    = var.resource_manager_tags
     service_account          = local.service_account
     shielded_instance_config = var.shielded_instance_config
     source_image_family      = local.source_image_family             # requires source_image_logic.tf
@@ -95,6 +108,7 @@ locals {
     spot                     = var.enable_spot_vm
     termination_action       = try(var.spot_instance_config.termination_action, null)
     reservation_name         = local.reservation_name
+    future_reservation       = local.future_reservation
     maintenance_interval     = var.maintenance_interval
     instance_properties_json = jsonencode(var.instance_properties)
 
@@ -105,7 +119,8 @@ locals {
     startup_script  = local.ghpc_startup_script
     network_storage = var.network_storage
 
-    enable_maintenance_reservation = var.enable_maintenance_reservation
+    enable_maintenance_reservation   = var.enable_maintenance_reservation
+    enable_opportunistic_maintenance = var.enable_opportunistic_maintenance
   }
 }
 
@@ -139,6 +154,17 @@ locals {
 
   reservation_name = local.res_match.whole == null ? "" : "${local.res_prefix}${local.res_short_name}${local.res_suffix}"
 }
+
+locals {
+  fr_match = regex("^(?P<whole>projects/(?P<project>[a-z0-9-]+)/zones/(?P<zone>[a-z0-9-]+)/futureReservations/)?(?P<name>[a-z0-9-]+)?$", var.future_reservation)
+
+  fr_name    = local.fr_match.name
+  fr_project = coalesce(local.fr_match.project, var.project_id)
+  fr_zone    = coalesce(local.fr_match.zone, var.zone)
+
+  future_reservation = var.future_reservation == "" ? "" : "projects/${local.fr_project}/zones/${local.fr_zone}/futureReservations/${local.fr_name}"
+}
+
 
 # tflint-ignore: terraform_unused_declarations
 data "google_compute_reservation" "reservation" {

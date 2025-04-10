@@ -16,7 +16,7 @@ import pytest
 from mock import Mock
 from common import TstNodeset, TstCfg, TstMachineConf, TstTemplateInfo
 
-import addict
+import addict # type: ignore
 import conf
 import util
 
@@ -44,7 +44,9 @@ def test_nodeset_lines():
         node_conf={"red": "velvet", "CPUs": 55},
     )
     lkp = util.Lookup(TstCfg())
-    lkp.template_info = Mock(return_value=TstTemplateInfo(gpu_count=33))
+    lkp.template_info = Mock(return_value=TstTemplateInfo(
+        gpu=util.AcceleratorInfo(type="Popov", count=33)
+    ))
     mc = TstMachineConf(
         cpus=5,
         memory=6,
@@ -54,7 +56,7 @@ def test_nodeset_lines():
         threads_per_core=10,
         cores_per_socket=11,
     )
-    lkp.template_machine_conf = Mock(return_value=mc)
+    lkp.template_machine_conf = Mock(return_value=mc) # type: ignore[method-assign]
     assert conf.nodeset_lines(nodeset, lkp) == "\n".join(
         [
             "NodeName=m22-turbo-[0-4] State=CLOUD RealMemory=6 Boards=9 SocketsPerBoard=8 CoresPerSocket=11 ThreadsPerCore=10 CPUs=55 Gres=gpu:33 red=velvet",

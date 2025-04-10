@@ -44,7 +44,11 @@ locals {
     host_name_prefix = var.configure_ssh_host_patterns
   }
 
-  prefix_file = "/tmp/prefix_file.json"
+  prefix_file                  = "/tmp/prefix_file.json"
+  ansible_docker_settings_file = "/tmp/ansible_docker_settings.json"
+
+  docker_config    = try(jsondecode(var.docker.daemon_config), {})
+  docker_data_root = try(local.docker_config.data-root, null)
 
   configure_ssh_runners = local.configure_ssh ? [
     {
@@ -89,12 +93,44 @@ locals {
     }
   ]
 
+  ofi_runner = !var.set_ofi_cloud_rdma_tunables ? [] : [
+    {
+      type        = "data"
+      destination = "/etc/profile.d/set_ofi_cloud_rdma_tunables.sh"
+      content     = <<-EOT
+        #!/bin/bash
+        export FI_PROVIDER="verbs;ofi_rxm"
+        export FI_OFI_RXM_USE_RNDV_WRITE=1
+        export FI_VERBS_INLINE_SIZE=39
+        export I_MPI_FABRICS="shm:ofi"
+        export FI_UNIVERSE_SIZE=3072
+        EOT
+    },
+  ]
+
+  rdma_runner = !var.install_cloud_rdma_drivers ? [] : [
+    {
+      type        = "shell"
+      source      = "${path.module}/files/install_cloud_rdma_drivers.sh"
+      destination = "install_cloud_rdma_drivers.sh"
+    }
+  ]
+
   docker_runner = !var.docker.enabled ? [] : [
+    {
+      type        = "data"
+      destination = local.ansible_docker_settings_file
+      content = jsonencode({
+        enable_docker_world_writable = var.docker.world_writable
+        docker_daemon_config         = var.docker.daemon_config
+        docker_data_root             = local.docker_data_root
+      })
+    },
     {
       type        = "ansible-local"
       destination = "install_docker.yml"
       content     = file("${path.module}/files/install_docker.yml")
-      args        = "-e enable_docker_world_writable=${var.docker.world_writable}"
+      args        = "-e \"@${local.ansible_docker_settings_file}\""
     },
   ]
 
@@ -132,11 +168,13 @@ locals {
     local.warnings,
     local.hotfix_runner,
     local.proxy_runner,
+    local.ofi_runner,
+    local.rdma_runner,
     local.monitoring_agent_installer,
     local.ansible_installer,
+    local.raid_setup, # order RAID early to ensure filesystem is ready for subsequent runners
     local.configure_ssh_runners,
     local.docker_runner,
-    local.raid_setup,
     var.runners
   )
 
@@ -185,6 +223,19 @@ locals {
       content = lookup(runner, "content", null)
       source  = lookup(runner, "source", null)
     }
+  }
+}
+
+check "health_check" {
+  assert {
+    condition     = local.docker_config == {}
+    error_message = <<-EOT
+      This message is only a warning. The Toolkit performs no validation of the
+      Docker daemon configuration. VM startup scripts will fail if the file is not
+      a valid Docker JSON configuration. Please review the Docker documentation:
+
+      https://docs.docker.com/engine/daemon/
+    EOT
   }
 }
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/slurm/python/venv/bin/python3.13
 
 # Copyright (C) SchedMD LLC.
 # Copyright 2024 Google LLC
@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import stat
 import time
+import yaml
 from pathlib import Path
 
 import util
@@ -83,7 +84,7 @@ SSSSSSSSSSSSS   SSS   SSSSSSSSSSSSSSS   SSSS        SSSS     SSSS     SSSS
 SSSSSSSSSSSS    SSS    SSSSSSSSSSSSS    SSSS        SSSS     SSSS     SSSS
 
 """
-
+_MAINTENANCE_SBATCH_SCRIPT_PATH = dirs.custom_scripts / "perform_maintenance.sh"
 
 def start_motd():
     """advise in motd that slurm is currently configuring"""
@@ -128,15 +129,20 @@ def run_custom_scripts():
     if lookup().is_controller:
         # controller has all scripts, but only runs controller.d
         custom_dirs = [custom_dir / "controller.d"]
+        timeout = lookup().cfg.get("controller_startup_scripts_timeout", 300)
     elif lookup().instance_role == "compute":
-        # compute setup with compute.d and nodeset.d
-        custom_dirs = [custom_dir / "compute.d", custom_dir / "nodeset.d"]
-    elif lookup().instance_role == "login":
+        # compute setup with nodeset.d
+        custom_dirs = [custom_dir / "nodeset.d"]
+        timeout = lookup().cfg.get("compute_startup_scripts_timeout", 300)
+    elif lookup().is_login_node:
         # login setup with only login.d
         custom_dirs = [custom_dir / "login.d"]
+        timeout = lookup().cfg.get("login_startup_scripts_timeout", 300)
     else:
         # Unknown role: run nothing
         custom_dirs = []
+        timeout = 300
+
     custom_scripts = [
         p
         for d in custom_dirs
@@ -148,15 +154,6 @@ def run_custom_scripts():
 
     try:
         for script in custom_scripts:
-            if "/controller.d/" in str(script):
-                timeout = lookup().cfg.get("controller_startup_scripts_timeout", 300)
-            elif "/compute.d/" in str(script) or "/nodeset.d/" in str(script):
-                timeout = lookup().cfg.get("compute_startup_scripts_timeout", 300)
-            elif "/login.d/" in str(script):
-                timeout = lookup().cfg.get("login_startup_scripts_timeout", 300)
-            else:
-                timeout = 300
-            timeout = None if not timeout or timeout < 0 else timeout
             log.info(f"running script {script.name} with timeout={timeout}")
             result = run(str(script), timeout=timeout, check=False, shell=True)
             runlog = (
@@ -175,6 +172,47 @@ def run_custom_scripts():
         log.exception(f"script {script} encountered an exception")
         raise e
 
+def mount_save_state_disk():
+    disk_name = f"/dev/disk/by-id/google-{lookup().cfg.controller_state_disk.device_name}"
+    mount_point = util.slurmdirs.state
+    fs_type = "ext4"
+
+    rdevice = util.run(f"realpath {disk_name}").stdout.strip()
+    file_output = util.run(f"file -s {rdevice}").stdout.strip()
+    if "filesystem" not in file_output:
+        util.run(f"mkfs -t {fs_type} -q {rdevice}")
+
+    fstab_entry = f"{disk_name} {mount_point} {fs_type}"
+    with open("/etc/fstab", "r") as f:
+        fstab = f.readlines()
+    if fstab_entry not in fstab:
+        with open("/etc/fstab", "a") as f:
+            f.write(f"{fstab_entry} defaults 0 0\n")
+
+    util.run(f"systemctl daemon-reload")
+
+    os.makedirs(mount_point, exist_ok=True)
+    util.run(f"mount {mount_point}")
+
+    util.chown_slurm(mount_point)
+
+def mount_munge_key_disk():
+    state_disk_dir = "/var/spool/slurm/munge"
+    mount_point = dirs.munge
+
+    os.makedirs(state_disk_dir, exist_ok=True)
+
+    util.run(f"mount --bind {state_disk_dir} {mount_point}")
+
+    fstab_entry = f"{state_disk_dir} {mount_point}"
+    with open("/etc/fstab", "r") as f:
+        fstab = f.readlines()
+    if fstab_entry not in fstab:
+        with open("/etc/fstab", "a") as f:
+            f.write(f"{fstab_entry} none bind 0 0\n")
+
+    util.run(f"systemctl daemon-reload")
+
 def setup_jwt_key():
     jwt_key = Path(slurmdirs.state / "jwt_hs256.key")
 
@@ -192,7 +230,7 @@ def setup_munge_key():
     if munge_key.exists():
         log.info("Munge key already exists. Skipping key generation.")
     else:
-        run("create-munge-key -f", timeout=30)
+        run(f"dd if=/dev/random of={munge_key} bs=1024 count=1")
 
     shutil.chown(munge_key, user="munge", group="munge")
     os.chmod(munge_key, stat.S_IRUSR)
@@ -222,6 +260,26 @@ slurm ALL= NOPASSWD: /usr/bin/systemctl restart slurmctld.service
     sudoers_file = Path("/etc/sudoers.d/slurm")
     sudoers_file.write_text(content)
     sudoers_file.chmod(0o0440)
+
+
+def setup_maintenance_script():
+    perform_maintenance = """#!/bin/bash
+
+#SBATCH --priority=low
+#SBATCH --time=180
+
+VM_NAME=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/name" -H "Metadata-Flavor: Google")
+ZONE=$(curl -s "http://metadata.google.internal/computeMetadata/v1/instance/zone" -H "Metadata-Flavor: Google" | cut -d '/' -f 4)
+
+gcloud compute instances perform-maintenance $VM_NAME \
+  --zone=$ZONE
+"""
+
+
+    with open(_MAINTENANCE_SBATCH_SCRIPT_PATH, "w") as f:
+        f.write(perform_maintenance)
+
+    util.chown_slurm(_MAINTENANCE_SBATCH_SCRIPT_PATH, mode=0o755)
 
 
 def update_system_config(file, content):
@@ -279,10 +337,10 @@ innodb_lock_wait_timeout=900
 def configure_dirs():
     for p in dirs.values():
         util.mkdirp(p)
-    
+
     for p in (dirs.slurm, dirs.scripts, dirs.custom_scripts):
         util.chown_slurm(p)
-    
+
     for p in slurmdirs.values():
         util.mkdirp(p)
         util.chown_slurm(p)
@@ -308,6 +366,11 @@ def setup_controller():
     util.chown_slurm(dirs.scripts / "config.yaml", mode=0o600)
     install_custom_scripts()
     conf.gen_controller_configs(lookup())
+    
+    if lookup().cfg.controller_state_disk.device_name != None:
+        mount_save_state_disk()
+        mount_munge_key_disk()
+    
     setup_jwt_key()
     setup_munge_key()
     setup_sudoers()
@@ -357,6 +420,9 @@ def setup_controller():
     run("systemctl start slurm_load_bq.timer", timeout=30)
     run("systemctl status slurm_load_bq.timer", timeout=30)
 
+    # Add script to perform maintenance
+    setup_maintenance_script()
+
     log.info("Done setting up controller")
     pass
 
@@ -400,7 +466,7 @@ def setup_compute():
     slurmd_options = [
         f'--conf-server="{slurmctld_host}:{lookup().control_host_port}"',
     ]
-    
+
     try:
         slurmd_feature = util.instance_metadata("attributes/slurmd_feature")
     except Exception:
@@ -436,10 +502,57 @@ def setup_compute():
 
     log.info("Done setting up compute")
 
+def setup_cloud_ops() -> None:
+    """Add health checks, deployment info, and updated setup path to cloud ops config."""
+    cloudOpsStatus = run(
+        "systemctl is-active --quiet google-cloud-ops-agent.service", check=False
+    ).returncode
+    
+    if cloudOpsStatus != 0:
+        return
+
+    with open("/etc/google-cloud-ops-agent/config.yaml", "r") as f:
+        file = yaml.safe_load(f)
+
+    # Update setup receiver path
+    file["logging"]["receivers"]["setup"]["include_paths"] = ["/var/log/slurm/setup.log"]
+
+    # Add chs_health_check receiver
+    file["logging"]["receivers"]["chs_health_check"] = {
+        "type": "files",
+        "include_paths": ["/var/log/slurm/chs_health_check.log"],
+        "record_log_file_path": True,
+    }
+
+    cluster_info = {
+        'type':'modify_fields',
+        'fields': {
+            'labels."cluster_name"':{
+                'static_value':f"{lookup().cfg.slurm_cluster_name}"
+            },
+            'labels."hostname"':{
+                'static_value': f"{lookup().hostname}"
+            }
+        }
+    }
+
+    file["logging"]["processors"]["add_cluster_info"] = cluster_info
+    file["logging"]["service"]["pipelines"]["slurmlog_pipeline"]["processors"].append("add_cluster_info")
+    file["logging"]["service"]["pipelines"]["slurmlog2_pipeline"]["processors"].append("add_cluster_info")
+
+    # Add chs_health_check to slurmlog2_pipeline
+    file["logging"]["service"]["pipelines"]["slurmlog2_pipeline"]["receivers"].append(
+        "chs_health_check"
+    )
+
+    with open("/etc/google-cloud-ops-agent/config.yaml", "w") as f:
+        yaml.safe_dump(file, f, sort_keys=False)
+
+    run("systemctl restart google-cloud-ops-agent.service", timeout=30)
 
 def main():
     start_motd()
-    
+
     log.info("Starting setup, fetching config")
     sleep_seconds = 5
     while True:
@@ -453,7 +566,7 @@ def main():
             log.exception(f"unexpected error while fetching config, sleeping for {sleep_seconds}s")
         time.sleep(sleep_seconds)
     log.info("Config fetched")
-
+    setup_cloud_ops()
     configure_dirs()
     # call the setup function for the instance type
     {
@@ -475,14 +588,17 @@ if __name__ == "__main__":
     try:
         main()
     except subprocess.TimeoutExpired as e:
+        stdout = (e.stdout or b"").decode().strip()
+        stderr = (e.stderr or b"").decode().strip()
+
         log.error(
             f"""TimeoutExpired:
     command={e.cmd}
     timeout={e.timeout}
     stdout:
-{e.stdout.strip()}
+{stdout}
     stderr:
-{e.stderr.strip()}
+{stderr}
 """
         )
         log.error("Aborting setup...")

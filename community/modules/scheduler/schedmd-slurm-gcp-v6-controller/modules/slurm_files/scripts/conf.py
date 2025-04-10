@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/slurm/python/venv/bin/python3.13
 
 # Copyright (C) SchedMD LLC.
 #
@@ -14,13 +14,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import List, Optional, Iterable, Dict, Set
+from typing import List, Optional, Iterable, Dict, Set, Tuple
 from itertools import chain
 from collections import defaultdict
 import json
 from pathlib import Path
 import util
 from util import dirs, slurmdirs
+import tpu
+from addict import Dict as NSDict # type: ignore
 
 FILE_PREAMBLE = """
 # Warning:
@@ -71,7 +73,7 @@ def conflines(lkp: util.Lookup) -> str:
     no_comma_params = get("no_comma_params", False)
 
     any_gpus = any(
-        lkp.template_info(nodeset.instance_template).gpu_count > 0
+        lkp.template_info(nodeset.instance_template).gpu
         for nodeset in lkp.cfg.nodeset.values()
     )
 
@@ -135,7 +137,7 @@ def nodeset_lines(nodeset, lkp: util.Lookup) -> str:
 
     # follow https://slurm.schedmd.com/slurm.conf.html#OPT_Boards
     # by setting Boards, SocketsPerBoard, CoresPerSocket, and ThreadsPerCore
-    gres = f"gpu:{template_info.gpu_count}" if template_info.gpu_count else None
+    gres = f"gpu:{template_info.gpu.count}" if template_info.gpu else None
     node_conf = {
         "RealMemory": machine_conf.memory,
         "Boards": machine_conf.boards,
@@ -183,10 +185,12 @@ def partitionlines(partition, lkp: util.Lookup) -> str:
     """Make a partition line for the slurm.conf"""
     MIN_MEM_PER_CPU = 100
 
-    def defmempercpu(nodeset: str) -> int:
-        template = lkp.cfg.nodeset.get(nodeset).instance_template
+    def defmempercpu(nodeset_name: str) -> int:
+        nodeset = lkp.cfg.nodeset.get(nodeset_name)
+        template = nodeset.instance_template
         machine = lkp.template_machine_conf(template)
-        return max(MIN_MEM_PER_CPU, machine.memory // machine.cpus)
+        mem_spec_limit = int(nodeset.node_conf.get("MemSpecLimit", 0))
+        return max(MIN_MEM_PER_CPU, (machine.memory - mem_spec_limit) // machine.cpus)
 
     defmem = min(
         map(defmempercpu, partition.partition_nodeset), default=MIN_MEM_PER_CPU
@@ -359,11 +363,10 @@ def gen_cloud_gres_conf(lkp: util.Lookup) -> None:
 
     gpu_nodes = defaultdict(list)
     for nodeset in lkp.cfg.nodeset.values():
-        template_info = lkp.template_info(nodeset.instance_template)
-        gpu_count = template_info.gpu_count
-        if gpu_count == 0:
-            continue
-        gpu_nodes[gpu_count].append(lkp.nodelist(nodeset))
+        ti = lkp.template_info(nodeset.instance_template)
+        gpu_count = ti.gpu.count if ti.gpu  else 0
+        if gpu_count:
+            gpu_nodes[gpu_count].append(lkp.nodelist(nodeset))
 
     lines = [
         dict_to_conf(
@@ -410,9 +413,9 @@ class Switch:
     def conf_line(self) -> str:
         d = {"SwitchName": self.name}
         if self.nodes:
-            d["Nodes"] = util.to_hostlist_fast(self.nodes)
+            d["Nodes"] = util.to_hostlist(self.nodes)
         if self.switches:
-            d["Switches"] = util.to_hostlist_fast(self.switches.keys())
+            d["Switches"] = util.to_hostlist(self.switches.keys())
         return dict_to_conf(d)
 
     def render_conf_lines(self) -> Iterable[str]:
@@ -437,6 +440,10 @@ class TopologySummary:
 
 
     @classmethod
+    def path(cls, lkp: util.Lookup) -> Path:
+        return lkp.etc_dir / "cloud_topology.summary.json"
+
+    @classmethod
     def loads(cls, s: str) -> "TopologySummary":
         d = json.loads(s)
         return cls(
@@ -444,6 +451,13 @@ class TopologySummary:
             down_nodes=d.get("down_nodes"),
             tpu_nodes=d.get("tpu_nodes"),
         )
+    
+    @classmethod
+    def load(cls, lkp: util.Lookup) -> "TopologySummary":
+        p = cls.path(lkp)
+        if not p.exists():
+            return cls() # Return empty instance
+        return cls.loads(p.read_text())
     
     def dumps(self) -> str:
         return json.dumps(
@@ -453,6 +467,9 @@ class TopologySummary:
                 "tpu_nodes": list(self.tpu_nodes),
             },
             indent=2)
+    
+    def dump(self, lkp: util.Lookup) -> None:
+        TopologySummary.path(lkp).write_text(self.dumps())
     
     def _nodenames(self) -> Set[str]:
         return set(self.physical_host) | self.down_nodes | self.tpu_nodes
@@ -484,7 +501,7 @@ class TopologyBuilder:
 
     def render_conf_lines(self) -> Iterable[str]:
         if not self._r.switches:
-            return []
+            return [] # type: ignore
         for s in sorted(self._r.switches.values(), key=lambda s: s.name):
             yield from s.render_conf_lines()
 
@@ -504,8 +521,8 @@ class TopologyBuilder:
         return compressed
 
 
-def add_tpu_nodeset_topology(nodeset: object, bldr: TopologyBuilder, lkp: util.Lookup):
-    tpuobj = util.TPU(nodeset)
+def add_tpu_nodeset_topology(nodeset: NSDict, bldr: TopologyBuilder, lkp: util.Lookup):
+    tpuobj = tpu.TPU.make(nodeset.nodeset_name, lkp)
     static, dynamic = lkp.nodenames(nodeset)
 
     pref = ["tpu-root",  f"ns_{nodeset.nodeset_name}"]
@@ -535,7 +552,7 @@ def _make_physical_path(physical_host: str) -> List[str]:
     return [_SLURM_TOPO_ROOT, *short_path]
 
 def add_nodeset_topology(
-    nodeset: object, bldr: TopologyBuilder, lkp: util.Lookup
+    nodeset: NSDict, bldr: TopologyBuilder, lkp: util.Lookup
 ) -> None:
     up_nodes = set()
     default_path = [_SLURM_TOPO_ROOT,  f"ns_{nodeset.nodeset_name}"]
@@ -547,7 +564,7 @@ def add_nodeset_topology(
         except Exception:
             continue
     
-        phys_host = inst.resourceStatus.get("physicalHost", "")
+        phys_host = inst.resource_status.physical_host or ""
         bldr.summary.physical_host[inst.name] = phys_host
         up_nodes.add(inst.name)
 
@@ -572,15 +589,13 @@ def gen_topology(lkp: util.Lookup) -> TopologyBuilder:
         add_nodeset_topology(ns, bldr, lkp)
     return bldr
 
-
-def gen_topology_conf(lkp: util.Lookup) -> bool:
+def gen_topology_conf(lkp: util.Lookup) -> Tuple[bool, TopologySummary]:
     """
     Generates slurm topology.conf.
     Returns whether the topology.conf got updated.
     """
     topo = gen_topology(lkp).compress()
     conf_file = lkp.etc_dir / "cloud_topology.conf"
-
 
     with open(conf_file, "w") as f:
         f.writelines(FILE_PREAMBLE + "\n")
@@ -589,13 +604,8 @@ def gen_topology_conf(lkp: util.Lookup) -> bool:
             f.write("\n")
         f.write("\n")
 
-    summary_file = lkp.etc_dir / "cloud_topology.summary.json"
-    prev_summary = TopologySummary()
-    if summary_file.exists():
-        prev_summary = TopologySummary.loads(summary_file.read_text())
-    summary_file.write_text(topo.summary.dumps())
-    
-    return topo.summary.requires_reconfigure(prev_summary)
+    prev_summary = TopologySummary.load(lkp)
+    return topo.summary.requires_reconfigure(prev_summary), topo.summary
 
 def install_topology_conf(lkp: util.Lookup) -> None:
     conf_file = lkp.etc_dir / "cloud_topology.conf"
@@ -619,5 +629,6 @@ def gen_controller_configs(lkp: util.Lookup) -> None:
     install_jobsubmit_lua(lkp)
 
     if topology_plugin(lkp) == TOPOLOGY_PLUGIN_TREE:
-        gen_topology_conf(lkp)
+        _, summary = gen_topology_conf(lkp)
+        summary.dump(lkp)
         install_topology_conf(lkp)

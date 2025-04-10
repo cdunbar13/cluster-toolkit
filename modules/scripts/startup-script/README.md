@@ -143,7 +143,7 @@ recommends using the _Cloud Ops Agent_, it is recommended to use
 #### Stackdriver Agent Installation
 
 If an image or machine already has Cloud Ops Agent installed and you would like
-to instead use the Stackdrier Agent, the following script will remove the Cloud
+to instead use the Stackdriver Agent, the following script will remove the Cloud
 Ops Agent and install the Stackdriver Agent.
 
 ```bash
@@ -282,7 +282,7 @@ limitations under the License.
 
 | Name | Version |
 |------|---------|
-| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.3 |
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.5 |
 | <a name="requirement_google"></a> [google](#requirement\_google) | >= 3.83 |
 | <a name="requirement_local"></a> [local](#requirement\_local) | >= 2.0.0 |
 | <a name="requirement_random"></a> [random](#requirement\_random) | ~> 3.0 |
@@ -318,13 +318,14 @@ No modules.
 | <a name="input_configure_ssh_host_patterns"></a> [configure\_ssh\_host\_patterns](#input\_configure\_ssh\_host\_patterns) | If specified, it will automate ssh configuration by:<br/>  - Defining a Host block for every element of this variable and setting StrictHostKeyChecking to 'No'.<br/>  Ex: "hpc*", "hpc01*", "ml*"<br/>  - The first time users log-in, it will create ssh keys that are added to the authorized keys list<br/>  This requires a shared /home filesystem and relies on specifying the right prefix. | `list(string)` | `[]` | no |
 | <a name="input_debug_file"></a> [debug\_file](#input\_debug\_file) | Path to an optional local to be written with 'startup\_script'. | `string` | `null` | no |
 | <a name="input_deployment_name"></a> [deployment\_name](#input\_deployment\_name) | Name of the HPC deployment, used to name GCS bucket for startup scripts. | `string` | n/a | yes |
-| <a name="input_docker"></a> [docker](#input\_docker) | Install and configure Docker | <pre>object({<br/>    enabled        = optional(bool, false)<br/>    world_writable = optional(bool, false)<br/>  })</pre> | <pre>{<br/>  "enabled": false<br/>}</pre> | no |
+| <a name="input_docker"></a> [docker](#input\_docker) | Install and configure Docker | <pre>object({<br/>    enabled        = optional(bool, false)<br/>    world_writable = optional(bool, false)<br/>    daemon_config  = optional(string, "")<br/>  })</pre> | <pre>{<br/>  "enabled": false<br/>}</pre> | no |
 | <a name="input_enable_docker_world_writable"></a> [enable\_docker\_world\_writable](#input\_enable\_docker\_world\_writable) | DEPRECATED: use var.docker | `bool` | `null` | no |
 | <a name="input_gcs_bucket_path"></a> [gcs\_bucket\_path](#input\_gcs\_bucket\_path) | The GCS path for storage bucket and the object, starting with `gs://`. | `string` | `null` | no |
 | <a name="input_http_no_proxy"></a> [http\_no\_proxy](#input\_http\_no\_proxy) | Domains for which to disable http\_proxy behavior. Honored only if var.http\_proxy is set | `string` | `".google.com,.googleapis.com,metadata.google.internal,localhost,127.0.0.1"` | no |
 | <a name="input_http_proxy"></a> [http\_proxy](#input\_http\_proxy) | Web (http and https) proxy configuration for pip, apt, and yum/dnf and interactive shells | `string` | `""` | no |
 | <a name="input_install_ansible"></a> [install\_ansible](#input\_install\_ansible) | Run Ansible installation script if either set to true or unset and runner of type 'ansible-local' are used. | `bool` | `null` | no |
 | <a name="input_install_cloud_ops_agent"></a> [install\_cloud\_ops\_agent](#input\_install\_cloud\_ops\_agent) | Warning: Consider using `install_stackdriver_agent` for better performance. Run Google Ops Agent installation script if set to true. | `bool` | `false` | no |
+| <a name="input_install_cloud_rdma_drivers"></a> [install\_cloud\_rdma\_drivers](#input\_install\_cloud\_rdma\_drivers) | If true, will install and reload Cloud RDMA drivers. Currently only supported on Rocky Linux 8. | `bool` | `false` | no |
 | <a name="input_install_docker"></a> [install\_docker](#input\_install\_docker) | DEPRECATED: use var.docker. | `bool` | `null` | no |
 | <a name="input_install_stackdriver_agent"></a> [install\_stackdriver\_agent](#input\_install\_stackdriver\_agent) | Run Google Stackdriver Agent installation script if set to true. Preferred over ops agent for performance. | `bool` | `false` | no |
 | <a name="input_labels"></a> [labels](#input\_labels) | Labels for the created GCS bucket. Key-value pairs. | `map(string)` | n/a | yes |
@@ -333,6 +334,7 @@ No modules.
 | <a name="input_project_id"></a> [project\_id](#input\_project\_id) | Project in which the HPC deployment will be created | `string` | n/a | yes |
 | <a name="input_region"></a> [region](#input\_region) | The region to deploy to | `string` | n/a | yes |
 | <a name="input_runners"></a> [runners](#input\_runners) | List of runners to run on remote VM.<br/>    Runners can be of type ansible-local, shell or data.<br/>    A runner must specify one of 'source' or 'content'.<br/>    All runners must specify 'destination'. If 'destination' does not include a<br/>    path, it will be copied in a temporary folder and deleted after running.<br/>    Runners may also pass 'args', which will be passed as argument to shell runners only. | `list(map(string))` | `[]` | no |
+| <a name="input_set_ofi_cloud_rdma_tunables"></a> [set\_ofi\_cloud\_rdma\_tunables](#input\_set\_ofi\_cloud\_rdma\_tunables) | Controls whether to enable specific OFI environment variables for workloads using Cloud RDMA networking. Should be false for non-RDMA workloads. | `bool` | `false` | no |
 
 ## Outputs
 
