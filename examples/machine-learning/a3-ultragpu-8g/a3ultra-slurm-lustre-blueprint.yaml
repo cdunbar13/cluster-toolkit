@@ -1,4 +1,4 @@
-# Copyright 2024 Google LLC
+# Copyright 2025 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,13 +24,12 @@ vars:
   # Image settings
   base_image:
     project: ubuntu-os-accelerator-images
-    family: ubuntu-accelerator-2204-amd64-with-nvidia-550
+    image: ubuntu-accelerator-2204-amd64-with-nvidia-550-v20250409
   image_build_machine_type: n2-standard-16
   build_slurm_from_git_ref: 6.9.1
   # Cluster env settings
   # net0 and filestore ranges must not overlap
   net0_range: 192.168.0.0/19
-  filestore_ip_range: 192.168.32.0/24
   net1_range: 192.168.64.0/18
   rdma_net_range: 192.168.128.0/18
   # Cluster Settings
@@ -175,7 +174,32 @@ deployment_groups:
                 name: nvidia-persistenced.service
                 state: stopped
                 enabled: false
-
+      - type: ansible-local
+        destination: install_managed_lustre.yml
+        content: |
+          ---
+          - name: Install Managed Luster Client Modules
+            hosts: all
+            become: true
+            vars:
+              lustre_packages:
+              - lustre-client-modules-{{ ansible_kernel }}
+              - lustre-client-utils
+            tasks:
+            - name: Add gpg key for Lustre Client repo
+              ansible.builtin.get_url:
+                url: https://us-apt.pkg.dev/doc/repo-signing-key.gpg
+                dest: /etc/apt/keyrings/lustre-client.asc
+                mode: '0644'
+                force: true
+            - name: Add Lustre Client module repo
+              ansible.builtin.apt_repository:
+                repo: deb [ signed-by=/etc/apt/keyrings/lustre-client.asc ] https://us-apt.pkg.dev/projects/lustre-client-binaries lustre-client-ubuntu-{{ ansible_distribution_release }} main
+            - name: Install Lustre packages
+              ansible.builtin.apt:
+                name: "{{ item }}"
+                update_cache: true
+              loop: "{{ lustre_packages }}"
       - type: ansible-local
         destination: install_ibverbs_utils.yml
         content: |
@@ -198,7 +222,7 @@ deployment_groups:
     settings:
       disk_size: $(vars.disk_size_gb)
       machine_type: $(vars.image_build_machine_type)
-      source_image_family: $(vars.base_image.family)
+      source_image: $(vars.base_image.image)
       source_image_project_id: [$(vars.base_image.project)]
       image_family: $(vars.instance_image.family)
       omit_external_ip: false
@@ -225,6 +249,11 @@ deployment_groups:
         - protocol: tcp
         - protocol: udp
         - protocol: icmp
+
+  # Required for Managed Lustre instance
+  - id: private_service_access
+    source: community/modules/network/private-service-access
+    use: [a3ultra-slurm-net-0]
 
   - id: a3ultra-slurm-net-1
     source: modules/network/vpc
@@ -264,17 +293,15 @@ deployment_groups:
         - protocol: icmp
 
   - id: homefs
-    source: modules/file-system/filestore
+    source: modules/file-system/managed-lustre
     use:
     - a3ultra-slurm-net-0
+    - private_service_access
     settings:
-      filestore_tier: HIGH_SCALE_SSD
-      size_gb: 10240
+      size_gib: 18000
+      name: lustre-instance
       local_mount: /home
-      reserved_ip_range: $(vars.filestore_ip_range)
-      deletion_protection:
-        enabled: true
-        reason: Avoid data loss
+      remote_mount: lustrefs
     outputs:
     - network_storage
 
