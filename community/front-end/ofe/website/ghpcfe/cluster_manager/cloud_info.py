@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,7 +49,6 @@ gcp_machine_table = defaultdict(
         "t2d": defaultdict(lambda: "zen2"),  # TODO: Should also be zen3
         "h3": defaultdict(lambda: "sapphirerapids"),
         # Memory Optimized
-        "m2": defaultdict(lambda: "icelake"),
         "m2": defaultdict(lambda: "cascadelake"),
         "m1": defaultdict(
             lambda: "broadwell",
@@ -201,10 +200,6 @@ def _get_gcp_machine_types(
         "n2d-": [
             "pd-extreme", "hyperdisk-ml", "hyperdisk-balanced",
             "hyperdisk-extreme"
-        ],
-        "n1-": [
-            "pd-extreme", "hyperdisk-extreme", "hyperdisk-ml",
-            "hyperdisk-throughput", "hyperdisk-balanced"
         ],
         "t2d-": [
             "pd-extreme", "local-ssd", "hyperdisk-balanced",

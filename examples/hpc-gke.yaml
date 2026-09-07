@@ -1,4 +1,4 @@
-# Copyright 2023 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ vars:
   deployment_name: cluster-01
   region: us-central1
   gcp_public_cidrs_access_enabled: false
+  authorized_cidr:  # <your-ip-address>/32
 
 deployment_groups:
 - group: primary
@@ -38,7 +39,7 @@ deployment_groups:
           ip_cidr_range: 10.0.32.0/20
 
   - id: node_pool_service_account
-    source: community/modules/project/service-account
+    source: modules/project/service-account
     settings:
       name: gke-np-sa
       project_roles:
@@ -50,7 +51,7 @@ deployment_groups:
       - artifactregistry.reader
 
   - id: workload_service_account
-    source: community/modules/project/service-account
+    source: modules/project/service-account
     settings:
       name: gke-wl-sa
       project_roles:
@@ -68,6 +69,9 @@ deployment_groups:
       enable_private_endpoint: false  # Allows for access from authorized public IPs
       gcp_public_cidrs_access_enabled: $(vars.gcp_public_cidrs_access_enabled)
       configure_workload_identity_sa: true
+      master_authorized_networks:
+      - cidr_block: $(vars.authorized_cidr)
+        display_name: "external-network"
     outputs: [instructions]
 
   - id: compute_pool

@@ -1,4 +1,4 @@
-# Copyright 2023 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+locals {
+  auto_approved_pr_tests = []
+
+}
+
+
 resource "google_cloudbuild_trigger" "pr_test" {
   for_each    = data.external.list_tests_midnight.result
   name        = "PR-test-${each.key}"
@@ -19,7 +25,7 @@ resource "google_cloudbuild_trigger" "pr_test" {
 
   filename = "tools/cloud-build/daily-tests/builds/${each.key}.yaml"
   approval_config {
-    approval_required = true
+    approval_required = !contains(local.auto_approved_pr_tests, each.key)
   }
 
   github {
@@ -29,6 +35,10 @@ resource "google_cloudbuild_trigger" "pr_test" {
       branch          = ".*"
       comment_control = "COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY"
     }
+  }
+
+  substitutions = {
+    _TEST_PREFIX = "pr-"
   }
 
 }

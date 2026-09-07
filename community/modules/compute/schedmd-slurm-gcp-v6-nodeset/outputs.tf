@@ -1,4 +1,4 @@
-# Copyright 2023 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,6 +33,16 @@ output "nodeset" {
   }
 
   precondition {
+    condition     = var.accelerator_topology == null || var.enable_placement
+    error_message = "accelerator_topology requires enable_placement to be set to true."
+  }
+
+  precondition {
+    condition     = (var.accelerator_topology == null) || try(tonumber(split("x", var.accelerator_topology)[1]) % local.guest_accelerator[0].count == 0, false)
+    error_message = "accelerator_topology must be divisible by number of gpus in machine."
+  }
+
+  precondition {
     condition     = var.placement_max_distance == null || var.enable_placement
     error_message = "placement_max_distance requires enable_placement to be set to true."
   }
@@ -45,16 +55,6 @@ output "nodeset" {
   precondition {
     condition     = var.reservation_name == "" || !var.dws_flex.enabled
     error_message = "Cannot use reservations with DWS Flex."
-  }
-
-  precondition {
-    condition     = local.nodeset.gpu != null || !var.dws_flex.enabled || var.dws_flex.use_bulk_insert
-    error_message = "DWS Flex-Start is only supported for GPU instances"
-  }
-
-  precondition {
-    condition     = !var.enable_placement || !var.dws_flex.enabled
-    error_message = "Cannot use DWS Flex with `enable_placement`."
   }
 
   precondition {

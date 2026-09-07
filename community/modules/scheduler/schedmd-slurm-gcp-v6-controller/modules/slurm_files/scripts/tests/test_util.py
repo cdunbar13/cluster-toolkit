@@ -1,4 +1,4 @@
-# Copyright 2024 "Google LLC"
+# Copyright 2026 "Google LLC"
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,6 +23,8 @@ from common import TstNodeset, TstCfg # needed to import util
 import util
 from util import NodeState, MachineType, AcceleratorInfo, UpcomingMaintenance, InstanceResourceStatus, FutureReservation, ReservationDetails
 from google.api_core.client_options import ClientOptions  # noqa: E402
+from googleapiclient.errors import HttpError # type: ignore
+from util import NSDict
 
 # Note: need to install pytest-mock
 
@@ -65,7 +67,12 @@ from google.api_core.client_options import ClientOptions  # noqa: E402
     ],
 )
 def test_node_desc(name, expected):
-    assert util.lookup()._node_desc(name) == expected
+    cfg = TstCfg(
+        slurm_cluster_name="az",
+        nodeset={"buka": TstNodeset(nodeset_name="buka")},
+    )
+    lkp = util.Lookup(cfg)
+    assert lkp._node_desc(name) == expected
 
 
 @pytest.mark.parametrize(
@@ -79,11 +86,16 @@ def test_node_desc(name, expected):
     ],
 )
 def test_node_index(name, expected):
+    cfg = TstCfg(
+        slurm_cluster_name="az",
+        nodeset={"buka": TstNodeset(nodeset_name="buka")},
+    )
+    lkp = util.Lookup(cfg)
     if  type(expected) is type and issubclass(expected, Exception):
         with pytest.raises(expected):
-            util.lookup().node_index(name) 
+            lkp.node_index(name) 
     else:
-        assert util.lookup().node_index(name) == expected
+        assert lkp.node_index(name) == expected
 
 
 @pytest.mark.parametrize(
@@ -198,6 +210,8 @@ def test_nodeset_reservation_err(nodeset, err):
                     policies=[],
                     deployment_type=None,
                     reservation_mode=None,
+                    assured_count=0,
+                    delete_at_time=None,
                     bulk_insert_name="projects/bobin/reservations/robin")),
             (TstNodeset(
                 reservation_name="projects/bobin/reservations/robin",
@@ -210,6 +224,8 @@ def test_nodeset_reservation_err(nodeset, err):
                     policies=["wanders", "apples", "yum"],
                     deployment_type=None,
                     reservation_mode=None,
+                    assured_count=0,
+                    delete_at_time=None,
                     bulk_insert_name="projects/bobin/reservations/robin")),
             (TstNodeset(
                 reservation_name="projects/bobin/reservations/robin/snek/cheese-brie-6",
@@ -222,6 +238,8 @@ def test_nodeset_reservation_err(nodeset, err):
                     policies=[],
                     deployment_type=None,
                     reservation_mode=None,
+                    assured_count=0,
+                    delete_at_time=None,
                     bulk_insert_name="projects/bobin/reservations/robin/snek/cheese-brie-6")),
 
         ])
@@ -337,11 +355,11 @@ def test_node_state(node: str, state: Optional[NodeState], want: NodeState | Non
     cfg = TstCfg(
         slurm_cluster_name="c",
         nodeset={
-            "n": TstNodeset(node_count_static=2, node_count_dynamic_max=3)},
+            "n": TstNodeset(nodeset_name="n", node_count_static=2, node_count_dynamic_max=3)},
         nodeset_tpu={
-            "t": TstNodeset(node_count_static=2, node_count_dynamic_max=3)},
+            "t": TstNodeset(nodeset_name="t", node_count_static=2, node_count_dynamic_max=3)},
         nodeset_dyn={
-            "d": TstNodeset()},
+            "d": TstNodeset(nodeset_name="d")},
     )
     lkp = util.Lookup(cfg)
     lkp.slurm_nodes = lambda: {node: state} if state else {} # type: ignore[assignment]
@@ -405,6 +423,60 @@ def test_node_state(node: str, state: Optional[NodeState], want: NodeState | Non
     ])
 def test_MachineType_from_json(jo: dict, want: MachineType):
     assert MachineType.from_json(jo) == want
+
+
+@pytest.mark.parametrize(
+    "template,expected",
+    [
+        (
+            NSDict({
+                "machine_type": MachineType(
+                                    name="e2",
+                                    guest_cpus=12,
+                                    memory_mb=87040,
+                                    accelerators=[]),
+            }),
+            None
+        ),
+        (
+            NSDict({
+                "machine_type": MachineType(
+                                    name="tpu-machine",
+                                    guest_cpus=12,
+                                    memory_mb=87040,
+                                    accelerators=[
+                                        AcceleratorInfo(type="tpu-v6", count=1)
+                                    ]),
+            }),
+            None
+        ),
+        (
+            NSDict({
+                "machine_type": MachineType(
+                                    name="a2-highgpu-1g",
+                                    guest_cpus=12,
+                                    memory_mb=87040,
+                                    accelerators=[AcceleratorInfo(type="nvidia-tesla-a100", count=1)]
+                                    ),
+            }),
+            AcceleratorInfo(type="nvidia-tesla-a100", count=1)
+        ),
+        (
+            NSDict({
+                "machine_type": MachineType(
+                                    name="a2-highgpu-1g",
+                                    guest_cpus=12,
+                                    memory_mb=87040,
+                                    accelerators=[]),
+                "guestAccelerators":[ { "acceleratorCount": 1, "acceleratorType": "nvidia-tesla-a100" } ],
+            }),
+            AcceleratorInfo(type="nvidia-tesla-a100", count=1)
+        ),
+    ],
+)
+def test_get_template_gpu(template, expected):
+    assert util.get_template_gpu(template) == expected
+
 
 UTC, PST = timezone.utc, timezone(timedelta(hours=-8))
 
@@ -493,6 +565,25 @@ def test_parse_InstanceResourceStatus(got: dict, want: Optional[InstanceResource
     assert InstanceResourceStatus.from_json(got) == want
 
 
+@pytest.mark.parametrize(
+    "link,component_name,expected",
+    [
+        (
+            "mylink/regions/us-cental1/other",
+            "regions",
+            "us-cental1"
+        ),
+        (
+            "mylink/global/other",
+            "regions",
+            None
+        ),
+    ],
+)
+def test_get_self_link_component(link, component_name, expected):
+    assert util.get_self_link_component(link, component_name) == expected
+
+
 def test_future_reservation_none():
     lkp = util.Lookup(TstCfg())
     assert lkp.future_reservation(TstNodeset()) == None
@@ -549,6 +640,8 @@ def test_future_reservation_active(_):
                 name='melon',
                 policies=[],
                 reservation_mode=None,
+                assured_count=0,
+                delete_at_time=None,
                 bulk_insert_name="projects/manhattan/reservations/melon",
                 deployment_type=None))
     
@@ -584,3 +677,165 @@ def test_future_reservation_inactive(_):
     
     lkp._get_future_reservation.assert_called_once_with("manhattan", "danger", "zebra")
     lkp._get_reservation.assert_not_called()
+
+@pytest.mark.parametrize(
+    "v1, v2, expected",
+    [
+        ("22.05", "21.08", True),
+        ("21.08", "22.05", False),
+        ("22.05", "22.05", True),
+        ("22.05", "22.04", True),
+        ("22.04", "22.05", False),
+        ("22.05.1", "22.05", True),
+        ("22.05", "22.05.1", True),
+        ("22.05.1", "22.05.2", True),
+        ("invalid", "22.05", False),
+        ("22.05", "invalid", False),
+        ("21.08.1", "22.05.3", False),
+    ],
+)
+def test_slurm_version_gte(v1, v2, expected):
+    assert util.slurm_version_gte(v1, v2) == expected
+
+@pytest.mark.parametrize(
+    "stdout_data, exception_to_raise, expected_version",
+    [
+        ("slurm 23.02.6", None, "23.02"),
+        ("slurm version 24.11.0-pre1", None, "24.11"),
+        ("Some other output", None, "unknown"),
+        ("", None, "unknown"),
+        (None, FileNotFoundError("slurmctld not found"), "unknown"),
+        (None, Exception("simulated command failure"), "unknown"),
+    ],
+)
+def test_slurm_version(stdout_data, exception_to_raise, expected_version, mocker):
+    mock_run = mocker.patch("util.run")
+
+    if exception_to_raise:
+        mock_run.side_effect = exception_to_raise
+    else:
+        mock_run.return_value = mocker.Mock(stdout=stdout_data)
+
+    lkp = util.Lookup(TstCfg())
+    version = lkp.slurm_version
+    
+    assert version == expected_version
+    mock_run.assert_called_once()
+
+
+def test_get_reservation_details_403(mocker):
+    lkp = util.Lookup(TstCfg())
+    
+    # Mock HttpError 403
+    mock_resp = Mock()
+    mock_resp.status = 403
+    error = HttpError(mock_resp, b'Forbidden')
+    
+    lkp._get_reservation = Mock(side_effect=error)
+    
+    details = lkp.get_reservation_details(
+        project="my-project",
+        zone="us-central1-a",
+        name="my-reservation",
+        bulk_insert_name="projects/my-project/reservations/my-reservation"
+    )
+    
+    assert details.policies == []
+    assert details.deployment_type is None
+    assert details.reservation_mode is None
+    assert details.assured_count == 0
+    assert details.bulk_insert_name == "projects/my-project/reservations/my-reservation"
+    
+    lkp._get_reservation.assert_called_once_with("my-project", "us-central1-a", "my-reservation")
+
+
+def test_get_reservation_details_error(mocker):
+    lkp = util.Lookup(TstCfg())
+    
+    # Mock HttpError 500
+    mock_resp = Mock()
+    mock_resp.status = 500
+    error = HttpError(mock_resp, b'Internal Server Error')
+    
+    lkp._get_reservation = Mock(side_effect=error)
+    
+    with pytest.raises(HttpError):
+        lkp.get_reservation_details(
+            project="my-project",
+            zone="us-central1-a",
+            name="my-reservation",
+            bulk_insert_name="projects/my-project/reservations/my-reservation"
+        )
+    
+    lkp._get_reservation.assert_called_once_with("my-project", "us-central1-a", "my-reservation")
+
+
+def test_batch_execute_custom_universe_domain(mocker):
+    mocker.patch("util.universe_domain", return_value="apis-sovereign.goog")
+    req0 = Mock()
+    req0.execute.return_value = {"status": "DONE", "name": "op-0"}
+    req1 = Mock()
+    req1.execute.return_value = {"status": "DONE", "name": "op-1"}
+
+    requests = {
+        "node-0": req0,
+        "node-1": req1,
+    }
+    done, failed = util.batch_execute(requests)
+    assert len(done) == 2
+    assert len(failed) == 0
+    assert done["node-0"]["name"] == "op-0"
+    assert done["node-1"]["name"] == "op-1"
+    req0.execute.assert_called_once()
+    req1.execute.assert_called_once()
+
+
+def test_batch_execute_custom_universe_partial_failure(mocker):
+    mocker.patch("util.universe_domain", return_value="apis-sovereign.goog")
+    req_ok = Mock()
+    req_ok.execute.return_value = {"status": "DONE"}
+    req_err = Mock()
+    req_err.execute.side_effect = RuntimeError("API error")
+
+    requests = {
+        "node-ok": req_ok,
+        "node-err": req_err,
+    }
+    done, failed = util.batch_execute(requests)
+    assert len(done) == 1
+    assert len(failed) == 1
+    assert "node-ok" in done
+    assert "node-err" in failed
+    req_ok.execute.assert_called_once()
+    req_err.execute.assert_called_once()
+
+
+def test_compute_service_default_universe_domain(mocker):
+    mocker.patch("util.universe_domain", return_value="googleapis.com")
+    mocker.patch("util.get_credentials", return_value=None)
+    mocker.patch("util.get_dev_key", return_value=None)
+    mock_build = mocker.patch("googleapiclient.discovery.build")
+
+    util.compute_service()
+    mock_build.assert_called_once()
+    args, kwargs = mock_build.call_args
+    assert args == ("compute", "beta")
+    assert kwargs.get("discoveryServiceUrl") == "https://www.googleapis.com/discovery/v1/apis/{api}/{apiVersion}/rest"
+    assert kwargs.get("static_discovery") is False
+    assert kwargs.get("client_options") is None
+
+
+def test_compute_service_custom_universe_domain(mocker):
+    mocker.patch("util.universe_domain", return_value="apis-sovereign.goog")
+    mocker.patch("util.get_credentials", return_value=None)
+    mocker.patch("util.get_dev_key", return_value=None)
+    mock_build = mocker.patch("googleapiclient.discovery.build")
+
+    util.compute_service()
+    mock_build.assert_called_once()
+    args, kwargs = mock_build.call_args
+    assert args == ("compute", "beta")
+    assert kwargs.get("discoveryServiceUrl") is None
+    assert kwargs.get("static_discovery") is True
+    assert kwargs.get("client_options").api_endpoint == "https://compute.apis-sovereign.goog/compute/beta/"
+    assert kwargs.get("client_options").universe_domain == "apis-sovereign.goog"

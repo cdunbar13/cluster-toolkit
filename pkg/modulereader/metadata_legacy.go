@@ -1,4 +1,4 @@
-// Copyright 2023 Google LLC
+// Copyright 2026 Google LLC
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -45,24 +45,17 @@ func defaultAPIList(source string) []string {
 			"compute.googleapis.com",
 			"storage.googleapis.com",
 		},
-		"community/modules/compute/pbspro-execution": {
-			"compute.googleapis.com",
-			"storage.googleapis.com",
-		},
 		"community/modules/database/slurm-cloudsql-federation": {
 			"bigqueryconnection.googleapis.com",
 			"sqladmin.googleapis.com",
 		},
-		"community/modules/file-system/DDN-EXAScaler": {
-			"compute.googleapis.com",
-			"deploymentmanager.googleapis.com",
-			"iam.googleapis.com",
-			"runtimeconfig.googleapis.com",
-		},
 		"community/modules/file-system/nfs-server": {
 			"compute.googleapis.com",
 		},
-		"community/modules/project/service-account": {
+		"modules/file-system/managed-lustre": {
+			"lustre.googleapis.com",
+		},
+		"modules/project/service-account": {
 			"iam.googleapis.com",
 		},
 		"community/modules/project/service-enablement": {
@@ -104,21 +97,7 @@ func defaultAPIList(source string) []string {
 			"iam.googleapis.com",
 			"storage.googleapis.com",
 		},
-		"community/modules/scheduler/pbspro-client": {
-			"compute.googleapis.com",
-			"storage.googleapis.com",
-		},
-		"community/modules/scheduler/pbspro-server": {
-			"compute.googleapis.com",
-			"storage.googleapis.com",
-		},
 		"community/modules/scripts/htcondor-install": {},
-		"community/modules/scripts/pbspro-preinstall": {
-			"iam.googleapis.com",
-			"storage.googleapis.com",
-		},
-		"community/modules/scripts/pbspro-install": {},
-		"community/modules/scripts/pbspro-qmgr":    {},
 		"community/modules/scripts/spack-setup": {
 			"storage.googleapis.com",
 		},

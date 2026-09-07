@@ -1,4 +1,4 @@
-# Copyright 2024 "Google LLC"
+# Copyright 2026 "Google LLC"
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,20 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from ssh import SSHManager
 from deployment import Deployment
-from test import SlurmTest
 from collections import defaultdict
-import unittest
 import logging
+import test
 
 logging.basicConfig(level=logging.INFO) 
 log = logging.getLogger()
 
-class SlurmTopologyTest(SlurmTest):
+class SlurmTopologyTest(test.SlurmTest):
     # Class to test Slurm topology
-    def __init__(self, deployment):
-        super().__init__(Deployment("tools/python-integration-tests/blueprints/topology-test.yaml"))
+    def get_deployment(self) -> Deployment:
+        return Deployment("tools/python-integration-tests/blueprints/topology-test.yaml")
 
     def runTest(self):
         # Checks isomorphism of last layer of nodes to determine topology.
@@ -40,7 +38,7 @@ class SlurmTopologyTest(SlurmTest):
         r_rack_set = [set(v) for v in r_rack.values()]
         s_rack_set = [set(v) for v in s_rack.values()]
 
-        self.assert_equal(r_rack_set, s_rack_set, "The two sets did not match.")
+        self.assert_equal({frozenset(s) for s in r_rack_set}, {frozenset(s) for s in s_rack_set}, "The two sets did not match.")
 
     def get_slurm_topology(self):
         stdin, stdout, stderr = self.ssh_client.exec_command("scontrol show topo")
@@ -56,7 +54,7 @@ class SlurmTopologyTest(SlurmTest):
         return physicalHost.split("/")[1]
 
     def get_slurm_rack(self, node: str):
-        stdin, stdout, stderr = self.ssh_client.exec_command(f"scontrol show topology {node} | tail -1 | cut -d' ' -f1")
+        stdin, stdout, stderr = self.ssh_client.exec_command(f"scontrol show topology node={node} | tail -1 | cut -d' ' -f1")
         switch_name = stdout.read().decode()
         err = stderr.read().decode()
         log.info(f"Slurm rack for {node}: {switch_name}")
@@ -68,4 +66,4 @@ class SlurmTopologyTest(SlurmTest):
         return switch_name
 
 if __name__ == "__main__":
-    unittest.main()
+    test.slurmtests_main()

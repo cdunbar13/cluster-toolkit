@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright 2023 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,17 +29,56 @@ $ ./list_tests.py | jq
 ```
 """
 
+import sys
 import glob
 import json
 import hashlib
+import itertools
 
 # OFE-deployment test is configured to only run as a PR trigger and does
 # not run on a nightly basis. Refer tools/cloud-build/provision/pr-ofe-test.tf
 # for the configuration.
-TO_SKIP = frozenset(["ofe-deployment"])
+TO_SKIP = frozenset([
+    "ofe-deployment",
+    "ml-a3-ultragpu-slurm",
+    "gke-a3-ultragpu",
+    "ml-a3-ultragpu-jbvms"
+])
 
 # Seed for deterministic order of tests, change to other value to shuffle tests
 ORDER_SEED = b"What a wonderful phrase"
+
+
+ # Test that shouldn't be scheduled too close to each other
+TEMPORAL_CONSTRAINTS = [
+    # (set_of_tests, min_distance)
+    ((
+        "ml-a4-highgpu-onspot-slurm",
+        "gke-a4-onspot"
+    ), 2*60),
+    ((
+        "ml-a3-ultragpu-onspot-slurm",
+        "ml-a3-ultragpu-onspot-jbvms",
+        "gke-a3-ultragpu-onspot"
+    ), 2*60),
+    ((
+        "ml-a3-megagpu-slurm-ubuntu",
+        "gke-a3-megagpu",
+        "ml-a3-megagpu-onspot-slurm-ubuntu",
+        "gke-a3-megagpu-onspot"
+    ), 1*60),
+    ((
+        "ml-a3-highgpu-slurm",
+        "gke-a3-highgpu"
+    ), 1*60),
+    ((
+        "ml-a3-highgpu-onspot-slurm",
+        "gke-a3-highgpu-onspot"
+    ), 1*60),
+]
+# TODO:
+# * Consider defining constraints (e.g. reservations used) as a tags within tests yamls
+# * Use better solution than random brute force
 
 def list_builds() -> list[str]:
     builds = [b[:-5] for b in glob.glob("*.yaml", root_dir="../daily-tests/builds/")]
@@ -48,7 +87,7 @@ def list_builds() -> list[str]:
 
 HASH = lambda s: int(hashlib.md5(s.encode() + ORDER_SEED).hexdigest(), 16)
 
-def schedule_evenly(builds: list[str], start: int, end: int) -> dict[str, str]:
+def schedule_evenly(builds: list[str], start: int, end: int) -> dict[str, int]:
     """
     Schedule builds evenly between start and end time.
     """
@@ -57,16 +96,20 @@ def schedule_evenly(builds: list[str], start: int, end: int) -> dict[str, str]:
     interval = (end - start) / max(1, len(builds) - 1)
     return {b: int(start + i * interval) for i, b in enumerate(order)}
 
-# DO_NOT_SUBMIT: please review the proposed change
-def schedule_consistently(builds: list[str], start: int, end: int) -> dict[str, str]:
-    duration = max(end - start, 1)
-    coord = lambda b: start + (HASH(b) % duration)
-    return {b: coord(b) for b in sorted(builds, key=coord)}
+
+def check_resource_constraints(schedule: dict[str, int]) -> bool:
+    for tests, min_distance in TEMPORAL_CONSTRAINTS:
+        for a, b  in itertools.combinations(tests, 2):
+            if abs(schedule[a] - schedule[b]) < min_distance:
+                return False
+    return True
+
 
 def crontab(schedule: dict[str, int]) -> dict[str, str]:
-    return { # test: "{minutes} {hours} * * MON-FRI"
-        k: f"{t % 60} {t // 60} * * MON-FRI" for k, t in schedule.items()}
+    return { # test: "{minutes} {hours} * * MON,TUE,THU,FRI"
+        k: f"{t % 60} {t // 60} * * MON,TUE,THU,FRI" for k, t in schedule.items()}
 
+MAX_TRIES = 102000
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser()
@@ -78,6 +121,13 @@ if __name__ == "__main__":
 
     assert args.start_time < args.end_time
     builds = list_builds()
-    schedule = schedule_evenly(builds, args.start_time, args.end_time)
-    #schedule = schedule_consistently(builds, args.start_time, args.end_time)
-    print(json.dumps(crontab(schedule)))
+
+    for _ in range(MAX_TRIES):
+        schedule = schedule_evenly(builds, args.start_time, args.end_time)
+        if check_resource_constraints(schedule):
+            print(json.dumps(crontab(schedule)))
+            sys.exit(0)
+        ORDER_SEED = hashlib.md5(ORDER_SEED).digest() # try again
+
+    print(f"Failed to find valid schedule after {MAX_TRIES} tries", file=sys.stderr)
+    sys.exit(1)
