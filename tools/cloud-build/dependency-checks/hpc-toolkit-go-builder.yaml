@@ -1,4 +1,4 @@
-# Copyright 2022 Google LLC
+# Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@ steps:
 - id: git-fetch-unshallow
   name: gcr.io/cloud-builders/git
   args: ['fetch', '--unshallow']
-- name: "golang:bullseye"
+- name: "golang:1.26-trixie"
   entrypoint: /bin/bash
   args:
   - -c
